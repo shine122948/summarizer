@@ -7,7 +7,7 @@ from openai import OpenAI
 # ---------------------------
 st.set_page_config(page_title="학생 프로젝트 보고서 요약기+", page_icon="📝", layout="wide")
 st.title("📝 학생 프로젝트 보고서 요약기+")
-st.caption("보고서를 50/100/300/500자로 요약하고, AI 추천 질문 기반 관점 요약도 생성합니다.")
+st.caption("보고서를 50/100/300/500자, 세특형태(500자 내외)로 요약하고, AI 추천 질문 기반 관점 요약도 생성합니다.")
 
 # OpenAI 클라이언트
 client = OpenAI(api_key=st.secrets["openai_api_key"])
@@ -41,12 +41,7 @@ if "selected_question" not in st.session_state:
 # ---------------------------
 with st.sidebar:
     st.header("⚙️ 옵션")
-    model = st.selectbox(
-        "모델 선택",
-        options=["gpt-4o-mini", "gpt-4o"],
-        index=0,
-        help="요약/질문 생성에 사용할 모델을 선택하세요.",
-    )
+    model = st.selectbox("모델 선택", ["gpt-4o-mini", "gpt-4o"], index=0)
     temperature = st.slider("창의성(temperature)", 0.0, 1.0, 0.2, 0.05)
     st.caption("※ 낮을수록 간결·정확, 높을수록 다양·창의적")
 
@@ -54,7 +49,6 @@ with st.sidebar:
 # 유틸 함수
 # ---------------------------
 def trim_to_chars(text: str, limit: int) -> str:
-    """문장 자연스러움을 유지하며 문자 수 제한."""
     if len(text) <= limit:
         return text.strip()
     cut = text[:limit].rstrip()
@@ -69,48 +63,47 @@ def trim_to_chars(text: str, limit: int) -> str:
     return cut.strip()
 
 def summarize_with_limit(report: str, limit: int, teacher_hint: str | None = None) -> str:
-    """OpenAI로 요약 후 문자 수 제한 보정."""
     base_rules = (
         "규칙:\n"
         "1) 한국어 3문장 이내로 요약 (문장 수 3개 이하)\n"
         "2) 새로운 사실 추가 금지, 원문 핵심만\n"
         "3) 목적→주요 수행→성과/한계 흐름 유지\n"
-        "4) 수치·지표가 있을 경우 명시\n"
-        f"5) 공백 포함 {limit}자 이내 목표\n"
+        f"4) 공백 포함 {limit}자 이내 목표\n"
     )
     perspective = ""
     if teacher_hint:
         perspective = f"\n교사 질문 관점 지시: '{teacher_hint}' 관점에서 핵심적으로 요약.\n"
 
     prompt = (
-        "다음은 고등학생의 프로젝트 활동 보고서다. 아래 지시를 따라 요약하라.\n\n"
-        f"{base_rules}{perspective}\n"
-        "[보고서 본문]\n"
-        f"{report}\n\n"
-        "출력은 불릿 없이 문장 세 개 이내로 작성."
+        f"다음은 고등학생의 프로젝트 보고서다.\n{base_rules}{perspective}\n"
+        "[보고서]\n" + report
     )
-    resp = client.responses.create(
-        model=model,
-        input=prompt,
-        temperature=float(temperature),
-    )
+    resp = client.responses.create(model=model, input=prompt, temperature=float(temperature))
     return trim_to_chars(resp.output_text, limit)
 
+def summarize_as_student_record(report: str) -> str:
+    """세특형태 500자 내외 요약"""
+    prompt = (
+        "다음은 고등학생의 프로젝트 활동 보고서이다. "
+        "이 내용을 바탕으로 학생부 세부능력 및 특기사항(세특) 형태로 500자 내외로 요약하라.\n"
+        "- 문체: '~함', '~함을 보임' 등 교사 기록형\n"
+        "- 항목 없음, 한 단락으로 자연스럽게 작성\n"
+        "- 핵심 포함: 주제, 수행 내용, 역량(탐구·문제해결·협업), 태도, 성과\n\n"
+        f"[보고서]\n{report}\n\n"
+        "출력: 500자 내외 한 단락의 세특 문장"
+    )
+    resp = client.responses.create(model=model, input=prompt, temperature=0.3)
+    return trim_to_chars(resp.output_text, 520)
+
 def generate_recommended_questions(report: str, k: int = 7) -> list:
-    """보고서 기반 교사용 추천 질문 생성."""
     prompt = (
         "다음 학생 프로젝트 보고서를 읽고, 교사가 관점 요약에 활용할 수 있는 질문을 한국어로 7개 제안하라.\n"
         "- 각 질문은 한 줄, 40자 이내\n"
         "- 관점 예: 문제 정의, 데이터 수집, 분석, 협업, 성과, 한계, 개선 등\n"
-        "- 예: '데이터 전처리와 변수 선택의 타당성', '협업 과정에서의 의사소통 전략', '예측 결과의 한계와 개선 방향'\n"
-        f"\n[보고서]\n{report}\n\n"
+        f"[보고서]\n{report}\n\n"
         "출력은 번호 없이 줄바꿈으로만 구분된 7개 질문."
     )
-    resp = client.responses.create(
-        model=model,
-        input=prompt,
-        temperature=0.3,
-    )
+    resp = client.responses.create(model=model, input=prompt, temperature=0.3)
     lines = [ln.strip("-• ").strip() for ln in resp.output_text.split("\n") if ln.strip()]
     cleaned = []
     for q in lines:
@@ -118,33 +111,17 @@ def generate_recommended_questions(report: str, k: int = 7) -> list:
             cleaned.append(q)
         if len(cleaned) == k:
             break
-    backup = [
-        "데이터 전처리의 타당성 검토",
-        "모델 선택과 하이퍼파라미터 근거",
-        "예측 결과의 신뢰도와 한계",
-        "협업 과정의 의사소통 전략",
-        "성과와 향후 개선 방향",
-        "기후 데이터의 지역별 특성 분석",
-        "AI 기술 적용의 윤리적 고려"
-    ]
-    for b in backup:
-        if len(cleaned) >= k:
-            break
-        if b not in cleaned:
-            cleaned.append(b)
     return cleaned[:k]
 
 # ---------------------------
-# 입력 영역
+# 입력창
 # ---------------------------
-st.subheader("1) 1000자 보고서 붙여넣기")
-
+st.subheader("1) 1000자 보고서 입력")
 col_top = st.columns([1, 2, 1])
 with col_top[0]:
-    use_sample = st.checkbox("샘플 입력 사용", value=False,
-                             help="체크하면 입력창이 샘플 보고서로 채워집니다.")
+    use_sample = st.checkbox("샘플 입력 사용", value=False)
 with col_top[2]:
-    clear_btn = st.button("입력 초기화", help="입력창과 추천 질문을 초기화합니다.")
+    clear_btn = st.button("입력 초기화")
 
 if clear_btn:
     st.session_state.report_input = ""
@@ -154,104 +131,53 @@ if clear_btn:
 if use_sample and not st.session_state.report_input.strip():
     st.session_state.report_input = SAMPLE_REPORT
 
-report = st.text_area(
-    "학생 보고서",
-    key="report_input",
-    height=280,
-    placeholder="학생이 작성한 프로젝트 활동 보고서를 붙여넣어 주세요.",
-)
+report = st.text_area("학생 보고서", key="report_input", height=280, placeholder="학생이 작성한 프로젝트 활동 보고서를 붙여넣어 주세요.")
 
 # ---------------------------
-# 버튼 영역
+# 버튼 및 기능 실행
 # ---------------------------
-colA, colB = st.columns([1, 1])
+colA, colB, colC = st.columns([1, 1, 1])
 with colA:
-    st.subheader("2) 자동 요약 (50/100/300/500자)")
-    gen_default = st.button("요약 생성", use_container_width=True, type="primary")
-
+    gen_default = st.button("기본 요약 (50/100/300/500자)", type="primary", use_container_width=True)
 with colB:
-    st.subheader("3) AI 추천 질문 → 관점 요약")
+    gen_sect = st.button("세특형태 500자 요약", use_container_width=True)
+with colC:
     gen_questions = st.button("AI 추천 질문 생성", use_container_width=True)
-    if st.session_state.reco_questions:
-        st.markdown("**추천 질문 선택:**")
-        st.session_state.selected_question = st.radio(
-            label="질문을 선택하세요",
-            options=st.session_state.reco_questions,
-            index=0 if st.session_state.selected_question not in st.session_state.reco_questions else st.session_state.reco_questions.index(st.session_state.selected_question),
-            key="selected_question_radio",
-        )
-        gen_q_summary = st.button("선택한 질문으로 관점 요약 생성", use_container_width=True)
-    else:
-        gen_q_summary = False
 
-# ---------------------------
-# 요약 생성
-# ---------------------------
-if gen_default:
-    if not report.strip():
-        st.warning("보고서를 먼저 입력해 주세요.")
-    else:
-        tabs = st.tabs(["50자", "100자", "300자", "500자"])
-        for tab, limit in zip(tabs, [50, 100, 300, 500]):
-            with tab:
-                with st.spinner(f"{limit}자 요약 생성 중..."):
-                    try:
-                        summary = summarize_with_limit(report, limit)
-                        st.write(summary)
-                        st.caption(f"문자 수: {len(summary)}")
-                    except Exception as e:
-                        st.error(f"요약 중 오류 발생: {e}")
+# 기본 요약
+if gen_default and report.strip():
+    tabs = st.tabs(["50자", "100자", "300자", "500자"])
+    for tab, limit in zip(tabs, [50, 100, 300, 500]):
+        with tab:
+            with st.spinner(f"{limit}자 요약 생성 중..."):
+                summary = summarize_with_limit(report, limit)
+                st.write(summary)
+                st.caption(f"문자 수: {len(summary)}")
 
-# ---------------------------
+# 세특 요약
+if gen_sect and report.strip():
+    with st.spinner("세특형태 요약 생성 중..."):
+        summary = summarize_as_student_record(report)
+        st.subheader("🧾 세특형태 요약 (500자 내외)")
+        st.write(summary)
+        st.caption(f"문자 수: {len(summary)}")
+
 # 추천 질문 생성
-# ---------------------------
-if gen_questions:
-    if not report.strip():
-        st.warning("보고서를 먼저 입력하거나 '샘플 입력 사용'을 체크하세요.")
-    else:
-        with st.spinner("AI가 추천 질문을 생성 중입니다..."):
-            try:
-                st.session_state.reco_questions = generate_recommended_questions(report, k=7)
-                st.success("추천 질문이 생성되었습니다. 오른쪽에서 선택하세요.")
-            except Exception as e:
-                st.error(f"추천 질문 생성 중 오류 발생: {e}")
+if gen_questions and report.strip():
+    with st.spinner("AI가 추천 질문을 생성 중입니다..."):
+        st.session_state.reco_questions = generate_recommended_questions(report)
+        st.success("추천 질문이 생성되었습니다.")
 
-# ---------------------------
-# 선택 질문 요약
-# ---------------------------
-if gen_q_summary:
-    if not report.strip():
-        st.warning("보고서를 먼저 입력해 주세요.")
-    elif not st.session_state.selected_question:
-        st.warning("추천 질문을 선택해 주세요.")
-    else:
+if st.session_state.reco_questions:
+    st.markdown("**추천 질문 선택:**")
+    st.session_state.selected_question = st.radio("질문 선택", st.session_state.reco_questions)
+    gen_q_summary = st.button("선택한 질문으로 관점 요약 생성")
+    if gen_q_summary and st.session_state.selected_question:
         q = st.session_state.selected_question
-        with st.spinner(f"'{q}' 관점 요약 생성 중..."):
-            try:
-                q_limits = [300, 500]
-                qt1, qt2 = st.tabs([f"관점 요약 {q_limits[0]}자", f"관점 요약 {q_limits[1]}자"])
-                with qt1:
-                    s1 = summarize_with_limit(report, q_limits[0], teacher_hint=q)
-                    st.write(s1)
-                    st.caption(f"문자 수: {len(s1)}")
-                with qt2:
-                    s2 = summarize_with_limit(report, q_limits[1], teacher_hint=q)
-                    st.write(s2)
-                    st.caption(f"문자 수: {len(s2)}")
-            except Exception as e:
-                st.error(f"관점 요약 생성 중 오류 발생: {e}")
+        with st.spinner(f"'{q}' 관점 요약 중..."):
+            s = summarize_with_limit(report, 500, teacher_hint=q)
+            st.write(s)
+            st.caption(f"문자 수: {len(s)}")
 
-# ---------------------------
-# 푸터
-# ---------------------------
 st.divider()
-st.markdown(
-    textwrap.dedent(
-        """
-        **💡 사용 팁**
-        - 보고서는 구체적으로 작성할수록 요약 품질이 좋아집니다.  
-        - “AI 추천 질문”을 생성 후 선택하면, 해당 관점 중심으로 요약됩니다.  
-        - 요약은 3문장 이내로 자연스럽게 구성됩니다.
-        """
-    )
-)
+st.markdown("**💡 사용 팁**  \n- 세특형태 요약은 학생부 기록 문체로 자동 변환됩니다.")
